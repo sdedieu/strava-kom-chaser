@@ -1,0 +1,106 @@
+<article
+  class="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 hover:shadow-md transition-shadow overflow-hidden"
+  [attr.data-test]="'segment-card-' + analysis().segment.id"
+  [attr.data-verdict]="analysis().verdict"
+>
+  <header class="p-5 flex items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h3 class="text-base font-semibold text-slate-900 truncate" data-test="segment-name">
+        {{ analysis().segment.name }}
+      </h3>
+      <p class="text-sm text-slate-500 truncate">
+        {{ analysis().segment.city }} · Cat. {{ analysis().segment.climbCategory }}
+      </p>
+    </div>
+    <span
+      class="shrink-0 inline-flex items-center text-xs font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full ring-1"
+      [class]="theme().badgeClass"
+      data-test="segment-verdict"
+    >
+      {{ theme().label }}
+    </span>
+  </header>
+
+  <dl class="grid grid-cols-4 gap-px bg-slate-100 text-center text-sm">
+    <div class="bg-white p-3">
+      <dt class="text-[11px] uppercase tracking-wide text-slate-500">Distance</dt>
+      <dd class="mt-0.5 font-semibold text-slate-900" data-test="segment-distance">
+        {{ format.distance(analysis().segment.distanceM) }}
+      </dd>
+    </div>
+    <div class="bg-white p-3">
+      <dt class="text-[11px] uppercase tracking-wide text-slate-500">Avg grade</dt>
+      <dd class="mt-0.5 font-semibold text-slate-900" data-test="segment-grade">
+        {{ analysis().segment.averageGradePct }} %
+      </dd>
+    </div>
+    <div class="bg-white p-3">
+      <dt class="text-[11px] uppercase tracking-wide text-slate-500">Elev. gain</dt>
+      <dd class="mt-0.5 font-semibold text-slate-900" data-test="segment-elevation">
+        {{ analysis().segment.elevationGainM }} m
+      </dd>
+    </div>
+    <div class="bg-white p-3">
+      <dt class="text-[11px] uppercase tracking-wide text-slate-500">KOM speed</dt>
+      <dd class="mt-0.5 font-semibold text-slate-900" data-test="segment-speed">
+        {{ format.speed(analysis().komSpeedMs) }}
+      </dd>
+    </div>
+  </dl>
+
+  <section class="p-5 space-y-4 border-t border-slate-100">
+    <div class="flex items-center justify-between text-sm">
+      <div>
+        <p class="text-slate-500">Current KOM</p>
+        <p class="font-semibold text-slate-900" data-test="segment-kom-time">
+          {{ format.duration(analysis().komTimeS) }}
+          <span class="text-slate-500 font-normal">· {{ analysis().segment.kom.athleteName }}</span>
+        </p>
+      </div>
+      <div class="text-right">
+        <p class="text-slate-500">Power gap</p>
+        <p
+          class="font-semibold"
+          [class.text-emerald-600]="(analysis().deltaW ?? 1) <= 0"
+          [class.text-rose-600]="(analysis().deltaW ?? 0) > 0"
+          data-test="segment-delta"
+        >
+          {{ signedDeltaW(analysis().deltaW) }}
+        </p>
+      </div>
+    </div>
+
+    <div>
+      <div class="flex items-center justify-between text-xs text-slate-500 mb-1">
+        <span>You: {{ format.watts(analysis().athletePowerForDurationW) }}</span>
+        <span>KOM: {{ format.watts(analysis().requiredAveragePowerW) }}</span>
+      </div>
+      <div class="relative h-2.5 rounded-full bg-slate-100 overflow-hidden">
+        <div
+          class="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r"
+          [class]="theme().accentClass"
+          [style.width.%]="gaugeWidthPct()"
+          data-test="segment-gauge"
+        ></div>
+        <div
+          class="absolute inset-y-0 w-px bg-slate-700/60"
+          style="left: 100%; transform: translateX(-1px)"
+          aria-hidden="true"
+        ></div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between text-xs text-slate-500">
+      <span>{{ analysis().segment.effortCount | number }} efforts · {{ analysis().segment.athleteCount | number }} athletes</span>
+      <a
+        [href]="stravaUrl()"
+        target="_blank"
+        rel="noopener"
+        class="text-orange-600 hover:text-orange-700 font-semibold"
+        data-test="segment-strava-link"
+      >
+        View on Strava ↗
+      </a>
+    </div>
+  </section>
+</article>

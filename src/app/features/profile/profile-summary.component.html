@@ -1,0 +1,83 @@
+<section
+  class="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 overflow-hidden"
+  data-test="profile-summary"
+>
+  <header class="flex items-center gap-4 p-5 bg-gradient-to-r from-orange-500 to-amber-400 text-white">
+    <img
+      [src]="athlete().profilePictureUrl"
+      [alt]="athlete().firstname + ' ' + athlete().lastname"
+      class="h-16 w-16 rounded-full ring-2 ring-white/80 bg-white"
+      data-test="profile-avatar"
+    />
+    <div class="min-w-0">
+      <h2 class="text-lg font-semibold truncate" data-test="profile-name">
+        {{ athlete().firstname }} {{ athlete().lastname }}
+      </h2>
+      @if (location(); as loc) {
+        <p class="text-sm text-white/90 truncate">
+          {{ loc }}
+        </p>
+      }
+      @if (athlete().premium) {
+        <span
+          class="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold uppercase tracking-wide bg-white/15 px-2 py-0.5 rounded-full"
+          data-test="profile-premium-badge"
+        >
+          Strava Subscriber
+        </span>
+      }
+    </div>
+  </header>
+
+  <dl class="grid grid-cols-3 divide-x divide-slate-200 text-center">
+    <div class="p-4">
+      <dt class="text-xs uppercase tracking-wide text-slate-500">FTP</dt>
+      <dd class="mt-1 text-xl font-semibold text-slate-900" data-test="profile-ftp">
+        {{ format.watts(athlete().ftpWatts) }}
+      </dd>
+    </div>
+    <div class="p-4">
+      <dt class="text-xs uppercase tracking-wide text-slate-500">W/kg</dt>
+      <dd class="mt-1 text-xl font-semibold text-slate-900" data-test="profile-wkg">
+        {{ wattsPerKg() | number: '1.1-2' }}
+      </dd>
+    </div>
+    <div class="p-4">
+      <dt class="text-xs uppercase tracking-wide text-slate-500">Weight</dt>
+      <dd class="mt-1 text-xl font-semibold text-slate-900" data-test="profile-weight">
+        {{ athlete().weightKg }} kg
+      </dd>
+    </div>
+  </dl>
+
+  <div class="p-5 border-t border-slate-200">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-xs uppercase tracking-wide text-slate-500">
+        Mean-maximal power curve
+      </h3>
+      <span class="text-[10px] text-slate-400" data-test="power-curve-source">
+        {{ sourceLabel() }}
+      </span>
+    </div>
+    <div class="flex items-end gap-2 h-32" data-test="power-curve">
+      @for (bar of curveBars(); track bar.label) {
+        <div
+          class="flex-1 flex flex-col items-center gap-1 group cursor-default"
+          [attr.data-test]="'power-curve-bar-' + bar.label"
+        >
+          <div
+            class="relative w-full rounded-t bg-gradient-to-t from-orange-500 to-amber-300 group-hover:from-orange-600 group-hover:to-amber-400 transition-all"
+            [style.height.%]="bar.heightPct"
+          >
+            <span
+              class="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-medium text-slate-700 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              {{ bar.watts }}W
+            </span>
+          </div>
+          <span class="text-[10px] font-medium text-slate-500">{{ bar.label }}</span>
+        </div>
+      }
+    </div>
+  </div>
+</section>

@@ -1,0 +1,41 @@
+<section
+  class="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-8 text-center"
+  data-test="connect-cta"
+>
+  <div class="mx-auto h-14 w-14 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-2xl font-bold mb-4">
+    KOM
+  </div>
+  <h2 class="text-xl font-semibold text-slate-900 mb-2">
+    Connect your Strava account
+  </h2>
+  <p class="text-sm text-slate-500 max-w-md mx-auto mb-6">
+    We'll read your profile and the watts streams of your recent rides to
+    rebuild your power curve, then compare it to the current KOMs around
+    Grenoble.
+  </p>
+
+  @if (canConnect()) {
+    <button
+      type="button"
+      (click)="connect()"
+      class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#FC4C02] hover:bg-[#e54501] text-white font-semibold text-sm shadow-sm transition-colors"
+      data-test="connect-strava-button"
+    >
+      Connect with Strava
+    </button>
+  } @else {
+    <div
+      class="inline-flex flex-col gap-2 text-left text-sm text-slate-600 bg-slate-50 ring-1 ring-slate-200 rounded-lg p-4 max-w-md mx-auto"
+      data-test="missing-credentials"
+    >
+      <p class="font-semibold text-slate-900">No Strava credentials configured.</p>
+      <p>
+        Copy <code class="px-1 py-0.5 rounded bg-slate-200 text-xs">.env.example</code> to
+        <code class="px-1 py-0.5 rounded bg-slate-200 text-xs">.env</code>, fill
+        <code class="px-1 py-0.5 rounded bg-slate-200 text-xs">STRAVA_CLIENT_ID</code> and
+        <code class="px-1 py-0.5 rounded bg-slate-200 text-xs">STRAVA_CLIENT_SECRET</code>,
+        then restart <code class="px-1 py-0.5 rounded bg-slate-200 text-xs">npm start</code>.
+      </p>
+    </div>
+  }
+</section>

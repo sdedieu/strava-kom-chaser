@@ -1,0 +1,146 @@
+<header class="bg-white border-b border-slate-200">
+  <div class="max-w-6xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wider text-orange-600">
+        Strava KOM Chaser
+      </p>
+      <h1 class="text-2xl font-bold text-slate-900">Bike segments around Grenoble</h1>
+      <p class="text-sm text-slate-500">
+        Ranked by how realistic it is for you to take the KOM, based on your power curve.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      @if (dataSource() === 'mock') {
+        <span
+          class="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 ring-1 ring-amber-200"
+          data-test="datasource-badge"
+          title="No Strava credentials configured — showing sample data."
+        >
+          Demo data
+        </span>
+      } @else {
+        <span
+          class="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200"
+          data-test="datasource-badge"
+          title="Live data from your Strava account."
+        >
+          Live Strava
+        </span>
+      }
+
+      @if (isAuthenticated()) {
+        <button
+          type="button"
+          (click)="logout()"
+          class="text-xs font-semibold text-slate-600 hover:text-slate-900"
+          data-test="logout-button"
+        >
+          Disconnect
+        </button>
+      }
+
+      @if (status() === 'ready') {
+        <div
+          class="hidden md:flex items-center gap-2 text-sm text-slate-500"
+          data-test="header-summary"
+        >
+          <span class="font-semibold text-slate-900">{{ chasableCount() }}</span>
+          chasable out of
+          <span class="font-semibold text-slate-900">{{ counts().all }}</span>
+        </div>
+      }
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-8">
+  <aside class="space-y-6 lg:sticky lg:top-6 self-start">
+    @if (athlete(); as a) {
+      @if (powerCurve(); as pc) {
+        <app-profile-summary [athlete]="a" [powerCurve]="pc" />
+      }
+    } @else if (status() === 'loading') {
+      <div
+        class="h-64 rounded-2xl bg-white ring-1 ring-slate-200 shadow-sm animate-pulse"
+        data-test="profile-skeleton"
+      ></div>
+    }
+
+    @if (status() === 'ready' || status() === 'loading') {
+      <section
+        class="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-5"
+        data-test="filter-panel"
+      >
+        <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-3">Filter</h3>
+        <div class="flex flex-col gap-1.5">
+          @for (option of filterOptions; track option.id) {
+            <button
+              type="button"
+              (click)="setFilter(option.id)"
+              class="flex items-center justify-between text-sm px-3 py-2 rounded-lg transition-colors"
+              [class.bg-orange-50]="filter() === option.id"
+              [class.text-orange-700]="filter() === option.id"
+              [class.font-semibold]="filter() === option.id"
+              [class.text-slate-700]="filter() !== option.id"
+              [class.hover:bg-slate-100]="filter() !== option.id"
+              [attr.data-test]="'filter-' + option.id"
+              [attr.aria-pressed]="filter() === option.id"
+            >
+              <span>{{ option.label }}</span>
+              <span class="text-xs text-slate-500">{{ counts()[option.id] }}</span>
+            </button>
+          }
+        </div>
+      </section>
+    }
+  </aside>
+
+  <section>
+    @switch (status()) {
+      @case ('unauthenticated') {
+        <app-connect-cta />
+      }
+      @case ('loading') {
+        <div class="grid gap-4" data-test="segments-skeleton">
+          @for (i of [0, 1, 2, 3]; track i) {
+            <div class="h-44 rounded-2xl bg-white ring-1 ring-slate-200 shadow-sm animate-pulse"></div>
+          }
+        </div>
+      }
+      @case ('error') {
+        <div
+          class="rounded-2xl bg-rose-50 ring-1 ring-rose-200 text-rose-800 p-6 flex flex-col items-start gap-3"
+          data-test="error-panel"
+        >
+          <p class="font-semibold">Could not load Strava data.</p>
+          <p class="text-sm">{{ error() }}</p>
+          <button
+            type="button"
+            (click)="retry()"
+            class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700"
+            data-test="retry-button"
+          >
+            Try again
+          </button>
+        </div>
+      }
+      @case ('ready') {
+        @if (visibleAnalyses().length === 0) {
+          <div
+            class="rounded-2xl bg-white ring-1 ring-slate-200 p-8 text-center text-slate-500"
+            data-test="empty-state"
+          >
+            No segments match this filter.
+          </div>
+        } @else {
+          <div class="grid gap-4" data-test="segments-list">
+            @for (analysis of visibleAnalyses(); track analysis.segment.id) {
+              <app-segment-card [analysis]="analysis" />
+            }
+          </div>
+        }
+      }
+    }
+  </section>
+</main>

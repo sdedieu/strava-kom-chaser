@@ -1,56 +1,34 @@
 {
-  "name": "strava-kom-chaser",
-  "version": "0.0.0",
-  "scripts": {
-    "ng": "ng",
-    "start": "concurrently -k -n api,ng -c cyan,green \"npm:start:api\" \"npm:start:ng\"",
-    "start:api": "node --watch scripts/dev-api-server.mjs",
-    "start:ng": "ng serve",
-    "build": "ng build",
-    "watch": "ng build --watch --configuration development",
-    "test": "ng test",
-    "serve:ssr:strava-kom-chaser": "node dist/strava-kom-chaser/server/server.mjs"
-  },
-  "prettier": {
-    "printWidth": 100,
-    "singleQuote": true,
-    "overrides": [
-      {
-        "files": "*.html",
-        "options": {
-          "parser": "angular"
-        }
-      }
-    ]
-  },
+  "name": "kom-hunter",
+  "version": "0.1.0",
   "private": true,
-  "packageManager": "npm@10.9.2",
+  "scripts": {
+    "start": "ng serve",
+    "build": "ng build",
+    "deploy": "npm run build && firebase deploy"
+  },
   "dependencies": {
-    "@angular/common": "^21.0.0",
-    "@angular/compiler": "^21.0.0",
-    "@angular/core": "^21.0.0",
-    "@angular/forms": "^21.0.0",
-    "@angular/platform-browser": "^21.0.0",
-    "@angular/platform-server": "^21.0.0",
-    "@angular/router": "^21.0.0",
-    "@angular/ssr": "^21.0.4",
-    "dotenv": "^17.4.2",
-    "express": "^5.1.0",
+    "@angular/common": "^22.1.2",
+    "@angular/compiler": "^22.1.2",
+    "@angular/core": "^22.1.2",
+    "@angular/fire": "^20.0.1",
+    "@angular/forms": "^22.1.2",
+    "@angular/platform-browser": "^22.1.2",
+    "@angular/router": "^22.1.2",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },
   "devDependencies": {
-    "@angular/build": "^21.0.4",
-    "@angular/cli": "^21.0.4",
-    "@angular/compiler-cli": "^21.0.0",
+    "@angular/build": "^22.1.4",
+    "@angular/cli": "^22.1.4",
+    "@angular/compiler-cli": "^22.1.2",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.1.12",
-    "@types/express": "^5.0.1",
-    "@types/node": "^20.17.19",
-    "concurrently": "^9.2.1",
-    "jsdom": "^27.1.0",
+    "jsdom": "^28.0.0",
     "postcss": "^8.5.3",
+    "prettier": "^3.8.1",
     "tailwindcss": "^4.1.12",
-    "typescript": "~5.9.2",
+    "typescript": "~6.0.3",
     "vitest": "^4.0.8"
   }
 }

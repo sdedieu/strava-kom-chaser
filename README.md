@@ -50,3 +50,36 @@ Replace `predictTime()` later with the stronger model described in the product p
 - gradient distribution
 - acceleration/cornering penalty
 - uncertainty / probability of beating KOM
+
+## Local segment discovery cache
+
+Call the authenticated `discoverSegments` Cloud Function with
+`{ bounds: [south, west, north, east], activity_type: 'riding' }` (or `'running'`).
+It subdivides saturated tiles and saves summaries in the global
+`segments/<segmentId>` collection with a 24-hour expiry. Progress is shared at
+`segmentDiscoveryJobs/<queryId>`, so another caller can resume the same query.
+The authenticated user only supplies the Strava token; discovered segments and
+jobs do not belong to that user.
+Explore requires Strava Extended Access permission and cannot guarantee exhaustive coverage.
+
+Each call makes up to 20 Explore requests within a bounded execution time, using
+the same application quota tracking as activity sync. If `status` is `paused`,
+call again with the same parameters at or after `retryAt` (Unix milliseconds).
+Continuation requires another call; no background discovery worker is started.
+Completed queries are reused for 24 hours. `saturated` counts tiles still returning
+ten results at the subdivision limit. Configure the client callable timeout to 120 seconds.
+
+Enable the `segments.expiresAt` TTL policy from `firestore.indexes.json`
+before use, or run:
+
+```bash
+gcloud firestore fields ttls update expiresAt --collection-group=segments --enable-ttl --project=YOUR_PROJECT_ID
+```
+
+TTL deletion is asynchronous; only serve documents with `expiresAt` in the future.
+Explore summaries have `resource_state: 2` and never replace existing full
+details. The scoring trigger skips summaries; activity sync upgrades them to
+full details (`resource_state: 3`) when needed, retaining temporary expiry.
+Derived user scores inherit that expiry; the `segments` collection-group TTL
+also covers those `users/<uid>/segments` documents. Existing browser access
+rules remain unchanged.

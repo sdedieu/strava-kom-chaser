@@ -15,6 +15,29 @@ import {
   onDocumentWritten,
 } from "firebase-functions/v2/firestore";
 import crypto from "node:crypto";
+import {
+  RequestWithAuth,
+  Token,
+  Segment,
+  StravaSegment,
+  Athlete,
+  Activity,
+  ActivityStream,
+  RawSegmentXoms,
+  SegmentXoms,
+  ActivityPowerCurve,
+  AthleteProfile,
+  SegmentTimePredictionOptions,
+  SegmentTimePrediction,
+  DURATIONS,
+} from "./models";
+import {
+  requirePositiveFinite,
+  requireFinite,
+  requireInRange,
+  clamp,
+  round,
+} from "./utils";
 
 initializeApp();
 const db = getFirestore();
@@ -64,12 +87,7 @@ type SyncJob = {
   backfillStarted?: boolean;
 };
 type SyncWork = {
-  kind:
-    | "athlete"
-    | "page"
-    | "activity"
-    | "segment"
-    | "stream";
+  kind: "athlete" | "page" | "activity" | "segment" | "stream";
   status: "pending" | "complete" | "failed";
   resourceId?: number;
   page?: number;
@@ -78,8 +96,53 @@ type SyncWork = {
   effortIndex?: number;
   lastError?: string;
 };
-type ClaimedJob = SyncJob & {userId: string; leaseOwner: string};
-type WorkChild = {id: string; work: SyncWork};
+type ClaimedJob = SyncJob & { userId: string; leaseOwner: string };
+type WorkChild = { id: string; work: SyncWork };
+
+type ExploreTile = { bounds: number[]; depth: number };
+type ExploreJob = {
+  pending: ExploreTile[];
+  visited: number;
+  saturated: number;
+  startedAt: number;
+  lease: string;
+  leaseUntil: number;
+};
+type ExplorerSegment = {
+  id: number;
+  name: string;
+  start_latlng: number[];
+  end_latlng: number[];
+  distance?: number;
+  avg_grade?: number;
+  elev_difference?: number;
+  climb_category?: number;
+  points?: string;
+};
+
+type WorkResult = {
+  checkpoint?: Partial<SyncWork>;
+  children?: WorkChild[];
+  save?: (tx: Transaction) => void;
+};
+type WorkContext = {
+  job: ClaimedJob;
+  work: SyncWork;
+  request: <T>(path: string) => Promise<T>;
+};
+type WorkHandler = (context: WorkContext) => Promise<WorkResult | void>;
+
+type SyncProgress = {
+  status: SyncJob["status"];
+  nextRunAt?: number;
+  lastError?: string;
+  attempts?: number;
+};
+
+type PowerCurvePoint = {
+  durationSeconds: number;
+  powerW: number;
+};
 
 /** Signals a durable pause until the applicable Strava quota resets. */
 class QuotaUnavailable extends Error {
@@ -95,6 +158,7 @@ class StravaRequestError extends Error {
   constructor(readonly status: number) {
     // Response bodies can contain private athlete data; do not persist them.
     super(`Strava request failed with HTTP ${status}.`);
+    console.error(`Strava request failed with HTTP ${status}.`);
   }
 }
 
@@ -226,178 +290,6 @@ const recordQuota = async (
     return resumeAt;
   });
 
-const DURATIONS = [
-  1, 5, 10, 15, 30, 45, 60, 90, 120, 180, 300, 600, 900, 1200, 1800, 3600, 5400,
-  7200,
-] as const;
-
-type Athlete = {
-  id: number;
-  username: string;
-  firstname: string;
-  lastname: string;
-  city: string;
-  state: string;
-  country: string;
-  sex: string;
-  premium: boolean;
-  created_at: string;
-  updated_at: string;
-  badge_type_id: number;
-  profile_medium: string;
-  profile: string;
-  athlete_type: number;
-  date_preference: string;
-  measurement_preference: string;
-  ftp: number | null;
-  weight: number;
-};
-
-type Token = {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
-  athlete: unknown;
-};
-
-type RequestWithAuth = {
-  auth?: {
-    uid?: string;
-  };
-};
-
-type AthleteProfile = {
-  athlete: Athlete;
-  zones: {
-    [key: string]: {zones: {max: number; min: number; time: number}[]};
-  };
-};
-
-type Effort = {
-  id: number;
-  elapsed_time: number;
-  average_watts?: number;
-  segment: {
-    id: number;
-    name: string;
-    distance: number;
-    average_grade: number;
-    total_elevation_gain: number;
-  };
-  resource_state: number;
-  name: string;
-  moving_time: number;
-  start_date: string;
-  start_date_local: string;
-  distance: number;
-  start_index: number;
-  end_index: number;
-  average_cadence: number;
-  device_watts: boolean;
-  kom_rank: number;
-  pr_rank: number;
-  hidden: boolean;
-};
-
-type Activity = {
-  id: number;
-  resource_state?: number;
-  sport_type?: string;
-  type?: string;
-  segment_efforts?: Effort[];
-};
-
-type ActivityStreamKey = "time" | "heartrate" | "watts" | "distance";
-
-type ActivityStream = {
-  [key in ActivityStreamKey]: {
-    data: number[];
-    series_type: string;
-    original_size: number;
-    resolution: string;
-  };
-};
-
-type PowerCurveDuration = (typeof DURATIONS)[number];
-
-type ActivityPowerCurve = Partial<Record<PowerCurveDuration, number>>;
-
-type RawSegmentXoms = {
-  kom?: string;
-  qom?: string;
-  overall?: string;
-};
-
-type SegmentXoms = {
-  kom?: number;
-  qom?: number;
-  overall?: number;
-};
-
-type Segment = {
-  id: number;
-  xoms: SegmentXoms;
-  resource_state: number;
-  name: string;
-  activity_type: string;
-  distance: number;
-  average_grade: number;
-  maximum_grade: number;
-  elevation_high: number;
-  elevation_low: number;
-  start_latlng: [number, number];
-  end_latlng: [number, number];
-  climb_category: number;
-  city: string;
-  state: string;
-  country: string;
-  private: boolean;
-  hazardous: boolean;
-  created_at: string;
-  updated_at: string;
-  total_elevation_gain: number;
-  map: {
-    id: string;
-    polyline: string;
-    resource_state: number;
-  };
-  effort_count: number;
-  athlete_count: number;
-  star_count: number;
-};
-
-type StravaSegment = Omit<Segment, "xoms"> & {
-  xoms: RawSegmentXoms;
-};
-
-export type SegmentTimePrediction = {
-  timeSeconds: number;
-  timeMinutes: number;
-  speedMps: number;
-  speedKmh: number;
-  estimatedPowerW: number;
-  riderWeightKg: number;
-  confidence: {
-    score: number;
-    label: "low" | "medium" | "high";
-    reasons: string[];
-  };
-};
-
-export type SegmentTimePredictionOptions = {
-  /** Used only when Strava reports weight as 0/null. */
-  fallbackRiderWeightKg?: number;
-  bikeAndEquipmentWeightKg?: number;
-  cda?: number;
-  crr?: number;
-  airDensityKgM3?: number;
-  drivetrainEfficiency?: number;
-  /** Discounts best recorded power when conditions may not be repeatable. */
-  powerCurveRealizationFactor?: number;
-  /** @deprecated Use powerCurveRealizationFactor instead. */
-  histogramRealizationFactor?: number;
-};
-
 /**
  * Makes an authenticated request to the Strava API.
  *
@@ -410,6 +302,7 @@ async function api<T>(path: string, token: string): Promise<T> {
   const requestedAt = Date.now();
   let recorded = false;
   try {
+    console.log(`Calling ${path}`);
     const r = await fetch(API + path, {
       headers: {Authorization: `Bearer ${token}`},
       signal: AbortSignal.timeout(20000),
@@ -572,6 +465,65 @@ export const normalizeExistingSegmentsXoms = onCall(
   },
 );
 
+export const normalizeExistingSegments = onCall(
+  {
+    cors: true,
+    secrets: [CLIENT_SECRET, CLIENT_ID],
+    region: REGION,
+  },
+  async () => {
+    const segments = await db.collection("segments").get();
+
+    for (const segment of segments.docs) {
+      const {
+        athlete_segment_stats, // eslint-disable-line camelcase
+        local_legend, // eslint-disable-line camelcase
+        elevation_profile, // eslint-disable-line camelcase
+        elevation_profiles, // eslint-disable-line camelcase
+        id,
+        map,
+        ...data
+      } = segment.data() as Segment;
+      await db.doc(segment.ref.path).set(data);
+      console.log(`DONE for segment ${id}`);
+    }
+  },
+);
+
+export const normalizeExistingActivities = onCall(
+  {
+    cors: true,
+    secrets: [CLIENT_SECRET, CLIENT_ID],
+    region: REGION,
+  },
+  async () => {
+    const users = await db.collection("users").get();
+
+    for (const user of users.docs) {
+      const userActivities = await db
+        .collection(`users/${user.id}/activities`)
+        .get();
+      for (const activity of userActivities.docs) {
+        const {
+          athlete,
+          available_zones, // eslint-disable-line camelcase
+          gear,
+          laps,
+          map,
+          splits_metrics, // eslint-disable-line camelcase
+          splits_standard, // eslint-disable-line camelcase
+          stats_visibility, // eslint-disable-line camelcase
+          segment_efforts, // eslint-disable-line camelcase
+          highlighted_kudosers, // eslint-disable-line camelcase
+          ...data
+        } = activity.data() as Activity;
+        await db.doc(activity.ref.path).set(data);
+        console.log(`DONE for activity ${activity.id}`);
+      }
+    }
+  },
+);
+
 export const stravaOAuthCallback = onCall(
   {
     cors: true,
@@ -638,7 +590,7 @@ const enqueueSync = async (
     );
 };
 
-const workCollection = (job: {userId: string; runId: string}) =>
+const workCollection = (job: { userId: string; runId: string }) =>
   db.collection(`${JOBS}/${job.userId}/runs/${job.runId}/work`);
 
 const startSync = async (
@@ -698,30 +650,9 @@ export const syncActivities = onDocumentWritten(
   },
 );
 
-type ExploreTile = { bounds: number[]; depth: number };
-type ExploreJob = {
-  pending: ExploreTile[];
-  visited: number;
-  saturated: number;
-  startedAt: number;
-  lease: string;
-  leaseUntil: number;
-};
-type ExplorerSegment = {
-  id: number;
-  name: string;
-  start_latlng: number[];
-  end_latlng: number[];
-  distance?: number;
-  avg_grade?: number;
-  elev_difference?: number;
-  climb_category?: number;
-  points?: string;
-};
-
 const tileSize = ([south, west, north, east]: number[]): number[] => [
   (north - south) * 111320,
-  (east - west) * 111320 * Math.cos((south + north) * Math.PI / 360),
+  (east - west) * 111320 * Math.cos(((south + north) * Math.PI) / 360),
 ];
 
 // Keep parent results: smaller viewports may rank different segments.
@@ -732,30 +663,53 @@ const splitTile = ({bounds, depth}: ExploreTile): ExploreTile[] => {
   const lng = (w + e) / 2;
   const dy = (n - s) * 0.01;
   const dx = (e - w) * 0.01;
-  return [[s, w, lat + dy, lng + dx], [s, lng - dx, lat + dy, e],
-    [lat - dy, w, n, lng + dx], [lat - dy, lng - dx, n, e]]
-    .map((child) => ({bounds: child, depth: depth + 1}));
+  return [
+    [s, w, lat + dy, lng + dx],
+    [s, lng - dx, lat + dy, e],
+    [lat - dy, w, n, lng + dx],
+    [lat - dy, lng - dx, n, e],
+  ].map((child) => ({bounds: child, depth: depth + 1}));
 };
 
 export const discoverSegments = onCall<{
   bounds: number[];
   activity_type?: "riding" | "running";
 }>(
-  {region: REGION, secrets: [CLIENT_ID, CLIENT_SECRET], timeoutSeconds: 90},
+  {
+    cors: true,
+    region: REGION,
+    secrets: [CLIENT_ID, CLIENT_SECRET],
+  },
   async (req) => {
+    console.log(
+      "discoverSegments called with",
+      req.data.bounds,
+      req.data.activity_type,
+    );
     const userId = uid(req);
     const {bounds, activity_type: activity = "riding"} = req.data || {};
-    if (!Array.isArray(bounds) || bounds.length !== 4 ||
-      !bounds.every(Number.isFinite) || bounds[0] < -85 || bounds[2] > 85 ||
-      bounds[1] < -180 || bounds[3] > 180 ||
-      bounds[0] >= bounds[2] || bounds[1] >= bounds[3] ||
+    if (
+      !Array.isArray(bounds) ||
+      bounds.length !== 4 ||
+      !bounds.every(Number.isFinite) ||
+      bounds[0] < -85 ||
+      bounds[2] > 85 ||
+      bounds[1] < -180 ||
+      bounds[3] > 180 ||
+      bounds[0] >= bounds[2] ||
+      bounds[1] >= bounds[3] ||
       Math.max(...tileSize(bounds)) > 100000 ||
-      !["riding", "running"].includes(activity)) {
-      throw new HttpsError("invalid-argument",
-        "Use south,west,north,east bounds up to 100 km, riding or running.");
+      !["riding", "running"].includes(activity)
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Use south,west,north,east bounds up to 100 km, riding or running.",
+      );
     }
-    const queryId = crypto.createHash("sha256")
-      .update(JSON.stringify([bounds, activity])).digest("hex");
+    const queryId = crypto
+      .createHash("sha256")
+      .update(JSON.stringify([bounds, activity]))
+      .digest("hex");
     const jobRef = db.doc(`segmentDiscoveryJobs/${queryId}`);
     const segments = db.collection("segments");
     const lease = crypto.randomUUID();
@@ -766,11 +720,16 @@ export const discoverSegments = onCall<{
         throw new HttpsError("aborted", "Discovery already running. Retry.");
       }
       const next: ExploreJob = {
-        ...(saved && saved.startedAt + DAY > now ? saved : {
-          pending: [{bounds, depth: 0}], visited: 0,
-          saturated: 0, startedAt: now,
-        }),
-        lease, leaseUntil: now + LEASE_DURATION,
+        ...(saved && saved.startedAt + DAY > now ?
+          saved :
+          {
+            pending: [{bounds, depth: 0}],
+            visited: 0,
+            saturated: 0,
+            startedAt: now,
+          }),
+        lease,
+        leaseUntil: now + LEASE_DURATION,
       };
       tx.set(jobRef, next);
       return next;
@@ -779,49 +738,59 @@ export const discoverSegments = onCall<{
     const deadline = Date.now() + 30000;
     try {
       // Bound each invocation; the caller resumes the same persisted frontier.
-      for (let calls = 0;
-        job.pending.length && calls < 20 && Date.now() < deadline; calls++) {
+      for (
+        let calls = 0;
+        job.pending.length && calls < 20 && Date.now() < deadline;
+        calls++
+      ) {
         const tile = job.pending[job.pending.length - 1];
         const query = new URLSearchParams({
-          bounds: tile.bounds.join(","), activity_type: activity,
+          bounds: tile.bounds.join(","),
+          activity_type: activity,
         });
         const token = await tokens(userId);
-        const response = await api<{segments: ExplorerSegment[]}>(
-          `/segments/explore?${query}`, token.access_token,
+        const response = await api<{ segments: ExplorerSegment[] }>(
+          `/segments/explore?${query}`,
+          token.access_token,
         );
-        if (!Array.isArray(response.segments) ||
-          response.segments.length > 10) {
+        if (
+          !Array.isArray(response.segments) ||
+          response.segments.length > 10
+        ) {
           throw new HttpsError("internal", "Unexpected Explore response.");
         }
         const fetchedAt = new Date(Date.now());
-        const documents = response.segments.map((segment) => {
-          const validPoint = (point: number[]) => Array.isArray(point) &&
-            point.length === 2 && point.every(Number.isFinite) &&
-            Math.abs(point[0]) <= 90 && Math.abs(point[1]) <= 180;
-          if (!segment || !Number.isSafeInteger(segment.id) ||
-            segment.id <= 0 ||
-            typeof segment.name !== "string" ||
-            !validPoint(segment.start_latlng) ||
-            !validPoint(segment.end_latlng)) {
-            throw new HttpsError("internal", "Invalid Explore segment.");
-          }
-          // Whitelist summary fields; do not persist athlete-specific data.
-          return stravaData({
-            id: segment.id, name: segment.name, resource_state: 2,
-            activity_type: activity === "riding" ? "Ride" : "Run",
-            start_latlng: segment.start_latlng, end_latlng: segment.end_latlng,
-            distance: segment.distance, average_grade: segment.avg_grade,
-            elev_difference: segment.elev_difference,
-            climb_category: segment.climb_category,
-            map: segment.points ? {polyline: segment.points} : undefined,
-          });
-        });
+        const documents = await Promise.all(
+          response.segments
+            .map(async (segment) => {
+              const segmentRef = await segments.doc(String(segment.id)).get();
+
+              if (segmentRef.exists) {
+                return null;
+              }
+
+              const _segment = await api<StravaSegment>(
+                `/segments/${segment.id}`,
+                token.access_token,
+              );
+
+              // Whitelist summary fields; do not persist athlete-specific data.
+              return stravaData({
+                ..._segment,
+                resource_state: 3,
+                xoms: normalizeXoms(_segment.xoms),
+              });
+            })
+            .filter(Boolean) as Promise<Segment>[],
+        );
         const saturated = response.segments.length === 10;
         const children = saturated ? splitTile(tile) : [];
-        const next = {...job,
+        const next = {
+          ...job,
           pending: [...job.pending.slice(0, -1), ...children],
           visited: job.visited + 1,
-          saturated: job.saturated + (saturated && !children.length ? 1 : 0)};
+          saturated: job.saturated + (saturated && !children.length ? 1 : 0),
+        };
         await db.runTransaction(async (tx) => {
           const current = (await tx.get(jobRef)).data() as
             ExploreJob | undefined;
@@ -835,8 +804,11 @@ export const discoverSegments = onCall<{
           for (const [index, document] of unique.entries()) {
             const cached = existing[index];
             if (cached.exists && cached.data()?.resource_state !== 2) continue;
-            tx.set(refs[index], {...document, fetchedAt,
-              expiresAt: new Date(fetchedAt.getTime() + DAY)});
+            tx.set(refs[index], {
+              ...document,
+              fetchedAt,
+              expiresAt: new Date(fetchedAt.getTime() + DAY),
+            });
           }
           tx.set(jobRef, next);
         });
@@ -845,17 +817,23 @@ export const discoverSegments = onCall<{
     } catch (error) {
       if (error instanceof QuotaUnavailable) {
         retryAt = error.resumeAt;
-      } else if (error instanceof ConnectionRequired ||
-        (error instanceof StravaRequestError && error.status === 401)) {
+      } else if (
+        error instanceof ConnectionRequired ||
+        (error instanceof StravaRequestError && error.status === 401)
+      ) {
         throw new HttpsError("failed-precondition", "Reconnect Strava.");
       } else if (error instanceof StravaRequestError && error.status === 403) {
-        throw new HttpsError("permission-denied",
-          "Strava Explore requires Extended Access Tier permission.");
+        throw new HttpsError(
+          "permission-denied",
+          "Strava Explore requires Extended Access Tier permission.",
+        );
       } else if (error instanceof HttpsError) {
         throw error;
       } else {
-        throw new HttpsError("unavailable",
-          "Discovery interrupted. Call again with the same bounds to resume.");
+        throw new HttpsError(
+          "unavailable",
+          "Discovery interrupted. Call again with the same bounds to resume.",
+        );
       }
     } finally {
       await db.runTransaction(async (tx) => {
@@ -865,10 +843,12 @@ export const discoverSegments = onCall<{
     }
     return {
       status: job.pending.length ? "paused" : "complete",
-      retryAt: job.pending.length ? retryAt ?? Date.now() : null,
-      pending: job.pending.length, visited: job.visited,
+      retryAt: job.pending.length ? (retryAt ?? Date.now()) : null,
+      pending: job.pending.length,
+      visited: job.visited,
       saturated: job.saturated,
-      cachePath: "segments", exhaustive: false,
+      cachePath: "segments",
+      exhaustive: false,
     };
   },
 );
@@ -918,18 +898,6 @@ const ownsLease = (current: SyncJob | undefined, job: ClaimedJob): boolean =>
   current.leaseOwner === job.leaseOwner &&
   (current.leaseUntil || 0) > Date.now();
 
-type WorkResult = {
-  checkpoint?: Partial<SyncWork>;
-  children?: WorkChild[];
-  save?: (tx: Transaction) => void;
-};
-type WorkContext = {
-  job: ClaimedJob;
-  work: SyncWork;
-  request: <T>(path: string) => Promise<T>;
-};
-type WorkHandler = (context: WorkContext) => Promise<WorkResult | void>;
-
 const workItem = (kind: SyncWork["kind"], resourceId: number): WorkChild => ({
   id: `${kind}-${resourceId}`,
   work: {kind, resourceId, status: "pending"},
@@ -950,13 +918,17 @@ const commitWork = async (
     const byId = new Map(children.map((child) => [child.id, child]));
     const unique = [...byId.values()];
     const existing = unique.length ?
-      await tx.getAll(...unique.map((child) => work.doc(child.id))) : [];
+      await tx.getAll(...unique.map((child) => work.doc(child.id))) :
+      [];
     unique.forEach((child, index) => {
       if (!existing[index].exists) tx.set(work.doc(child.id), child.work);
     });
     save?.(tx);
-    tx.set(work.doc(workId),
-      {status: "complete", ...checkpoint}, {merge: true});
+    tx.set(
+      work.doc(workId),
+      {status: "complete", ...checkpoint},
+      {merge: true},
+    );
     if (checkpoint.status === "failed") {
       tx.update(jobRef, {failures: FieldValue.increment(1)});
     }
@@ -974,6 +946,7 @@ const processWork = async (
   work: SyncWork,
   callback: WorkHandler,
 ): Promise<void> => {
+  console.log(`Processing ${work.kind} ${work.resourceId}`);
   const result = await callback({
     job,
     work,
@@ -984,11 +957,26 @@ const processWork = async (
 };
 
 const syncAthlete: WorkHandler = async ({job, request}) => {
-  const athlete = await request<Athlete>("/athlete");
+  const {
+    badge_type_id, // eslint-disable-line camelcase
+    bikes,
+    clubs,
+    follower,
+    follower_count, // eslint-disable-line camelcase
+    friend,
+    friend_count, // eslint-disable-line camelcase
+    mutual_friend_count, // eslint-disable-line camelcase
+    postable_clubs_count, // eslint-disable-line camelcase
+    shoes,
+    ...athlete
+  } = await request<Athlete>("/athlete");
+
   return {
-    save: (tx) => tx.set(db.doc(`users/${job.userId}`), {
-      athlete, updatedAt: FieldValue.serverTimestamp(),
-    }, {merge: true}),
+    save: (tx) =>
+      tx.set(db.doc(`users/${job.userId}`), {
+        athlete,
+        updatedAt: FieldValue.serverTimestamp(),
+      }),
   };
 };
 
@@ -1014,16 +1002,39 @@ const syncActivity: WorkHandler = async (context) => {
   const ref = db.doc(`users/${job.userId}/activities/${work.resourceId}`);
   const cached = (await ref.get()).data() as Activity | undefined;
   const hasDetails = cached?.resource_state === 3 || cached?.segment_efforts;
-  const activity = cached && hasDetails ? cached : await request<Activity>(
-    `/activities/${work.resourceId}?include_all_efforts=true`,
-  );
+  const {
+    athlete,
+    available_zones, // eslint-disable-line camelcase
+    gear,
+    laps,
+    map,
+    splits_metrics, // eslint-disable-line camelcase
+    splits_standard, // eslint-disable-line camelcase
+    stats_visibility, // eslint-disable-line camelcase
+    segment_efforts, // eslint-disable-line camelcase
+    highlighted_kudosers, // eslint-disable-line camelcase
+    ...activity
+  } =
+    cached && hasDetails ?
+      cached :
+      await request<Activity>(
+        `/activities/${work.resourceId}?include_all_efforts=true`,
+      );
   return {
     checkpoint: {status: "pending", phase: "efforts", effortIndex: 0},
     children: [workItem("stream", activity.id)],
-    save: (tx) => tx.set(ref, {
-      ...activity, stravaSyncRun: job.runId,
-      updatedAt: FieldValue.serverTimestamp(),
-    }, {merge: true}),
+    save: (tx) =>
+      cached && hasDetails ?
+        void 1 :
+        tx.set(
+          ref,
+          {
+            ...activity,
+            stravaSyncRun: job.runId,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          {merge: true},
+        ),
   };
 };
 
@@ -1044,8 +1055,10 @@ const syncActivityEfforts: WorkHandler = async ({job, work}) => {
     children: valid.map((effort) => workItem("segment", effort.segment.id)),
     save: (tx) => {
       for (const {segment, ...effort} of valid) {
-        tx.set(db.doc(`users/${job.userId}/segmentEfforts/${effort.id}`),
-          stravaData({...effort, segmentId: segment.id}));
+        tx.set(
+          db.doc(`users/${job.userId}/segmentEfforts/${effort.id}`),
+          stravaData({...effort, segmentId: segment.id}),
+        );
       }
     },
   };
@@ -1058,13 +1071,45 @@ const syncSegment: WorkHandler = async ({work, request}) => {
   const segment = await request<StravaSegment>(`/segments/${work.resourceId}`);
   const fetchedAt = new Date(Date.now());
   return {
-    save: (tx) => tx.set(ref, {
-      ...stravaData({...segment, resource_state: 3,
-        xoms: normalizeXoms(segment.xoms)}),
-      ...(cached.data()?.expiresAt ? {
-        fetchedAt, expiresAt: new Date(fetchedAt.getTime() + DAY),
-      } : {}),
-    }),
+    save: (tx) =>
+      tx.set(ref, {
+        ...stravaData({
+          name: segment.name,
+          activity_type: segment.activity_type,
+          distance: segment.distance,
+          average_grade: segment.average_grade,
+          maximum_grade: segment.maximum_grade,
+          elevation_high: segment.elevation_high,
+          elevation_low: segment.elevation_low,
+          start_latlng: segment.start_latlng as [number, number],
+          end_latlng: segment.end_latlng as [number, number],
+          climb_category: segment.climb_category,
+          city: segment.city,
+          state: segment.state,
+          country: segment.country,
+          private: segment.private,
+          hazardous: segment.hazardous,
+          created_at: segment.created_at,
+          updated_at: segment.updated_at,
+          total_elevation_gain: segment.total_elevation_gain,
+          map: {
+            id: segment.map.id,
+            polyline: segment.map.polyline,
+            resource_state: segment.map.resource_state,
+          },
+          effort_count: segment.effort_count,
+          athlete_count: segment.athlete_count,
+          star_count: segment.star_count,
+          resource_state: 3,
+          xoms: normalizeXoms(segment.xoms),
+        }),
+        ...(cached.data()?.expiresAt ?
+          {
+            fetchedAt,
+            expiresAt: new Date(fetchedAt.getTime() + DAY),
+          } :
+          {}),
+      }),
   };
 };
 
@@ -1098,36 +1143,34 @@ const workHandlers: Record<SyncWork["kind"], WorkHandler> = {
   stream: syncStream,
 };
 
-type SyncProgress = {
-  status: SyncJob["status"];
-  nextRunAt?: number;
-  lastError?: string;
-  attempts?: number;
-};
-
 const releaseJob = async (
-  job: ClaimedJob, update: SyncProgress,
+  job: ClaimedJob,
+  update: SyncProgress,
 ): Promise<void> => {
   const next = await db.runTransaction(async (tx) => {
     const ref = db.doc(`${JOBS}/${job.userId}`);
     const current = (await tx.get(ref)).data() as SyncJob | undefined;
     if (!ownsLease(current, job)) return;
     let progress = update;
-    const finished =
-      ["complete", "complete_with_errors"].includes(update.status);
+    const finished = ["complete", "complete_with_errors"].includes(
+      update.status,
+    );
     if (finished) {
       // An activity trigger may have added work since the worker's last query.
       const pending = await tx.get(
         workCollection(job).where("status", "==", "pending").limit(1),
       );
-      if (!pending.empty) progress = {status: "pending", nextRunAt: Date.now()};
+      if (!pending.empty) {
+        progress = {status: "pending", nextRunAt: Date.now()};
+      }
     }
     tx.update(ref, {
       ...progress,
       lastError: progress.lastError || null,
       attempts: progress.attempts || 0,
       nextRunAt: progress.nextRunAt ?? FieldValue.delete(),
-      leaseOwner: FieldValue.delete(), leaseUntil: FieldValue.delete(),
+      leaseOwner: FieldValue.delete(),
+      leaseUntil: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     return progress;
@@ -1139,7 +1182,8 @@ const releaseJob = async (
 };
 
 export const processStravaSync = onTaskDispatched<{
-  userId: string; runId: string;
+  userId: string;
+  runId: string;
 }>(
   {
     region: REGION,
@@ -1147,13 +1191,19 @@ export const processStravaSync = onTaskDispatched<{
     timeoutSeconds: 90,
     rateLimits: {maxConcurrentDispatches: 1, maxDispatchesPerSecond: 1},
     retryConfig: {
-      maxAttempts: 5, minBackoffSeconds: 30, maxBackoffSeconds: 300,
+      maxAttempts: 5,
+      minBackoffSeconds: 30,
+      maxBackoffSeconds: 300,
     },
   },
   async (req) => {
+    console.log(
+      `processStravaSync called with ${req.data.userId} ${req.data.runId}`,
+    );
     const {userId, runId} = req.data;
-    const invalidId = [userId, runId].some((id) =>
-      typeof id !== "string" || !id || id.includes("/"));
+    const invalidId = [userId, runId].some(
+      (id) => typeof id !== "string" || !id || id.includes("/"),
+    );
     if (invalidId) {
       throw new HttpsError("invalid-argument", "Invalid sync task.");
     }
@@ -1162,7 +1212,9 @@ export const processStravaSync = onTaskDispatched<{
     let workId: string | undefined;
     try {
       const pending = await workCollection(job)
-        .where("status", "==", "pending").limit(1).get();
+        .where("status", "==", "pending")
+        .limit(1)
+        .get();
       if (pending.empty) {
         return releaseJob(job, {
           status: job.failures ? "complete_with_errors" : "complete",
@@ -1174,23 +1226,33 @@ export const processStravaSync = onTaskDispatched<{
     } catch (error) {
       if (error instanceof QuotaUnavailable) {
         return releaseJob(job, {
-          status: "waiting", nextRunAt: error.resumeAt, attempts: job.attempts,
+          status: "waiting",
+          nextRunAt: error.resumeAt,
+          attempts: job.attempts,
         });
       }
       const unauthorized =
         error instanceof StravaRequestError && error.status === 401;
-      const needsAuth = error instanceof ConnectionRequired ||
+      const needsAuth =
+        error instanceof ConnectionRequired ||
         (unauthorized && job.attempts > 0);
       if (needsAuth) {
         return releaseJob(job, {
-          status: "needs_auth", lastError: "Reconnect Strava to continue.",
+          status: "needs_auth",
+          lastError: "Reconnect Strava to continue.",
         });
       }
       if (unauthorized) {
-        await db.doc(`users/${userId}/stravaTokens/${userId}`)
+        await db
+          .doc(`users/${userId}/stravaTokens/${userId}`)
           .update({expires_at: 0});
-      } else if (error instanceof StravaRequestError && error.status >= 400 &&
-        error.status < 500 && error.status !== 408 && workId) {
+      } else if (
+        error instanceof StravaRequestError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        workId
+      ) {
         await commitWork(job, workId, {
           checkpoint: {status: "failed", lastError: error.message},
         });
@@ -1199,11 +1261,15 @@ export const processStravaSync = onTaskDispatched<{
       const attempts = job.attempts + 1;
       const delay = Math.min(3600000, 30000 * 2 ** Math.min(attempts - 1, 7));
       console.error("Strava sync step failed", {
-        userId, workId, attempts,
+        userId,
+        workId,
+        attempts,
         error: error instanceof Error ? error.name : "UnknownError",
       });
       return releaseJob(job, {
-        status: "pending", nextRunAt: Date.now() + delay, attempts,
+        status: "pending",
+        nextRunAt: Date.now() + delay,
+        attempts,
         lastError: "Temporary sync failure; retry scheduled.",
       });
     }
@@ -1214,12 +1280,14 @@ export const processStravaSync = onTaskDispatched<{
 export const recoverStravaSyncs = onSchedule(
   {schedule: "every 5 minutes", region: REGION, timeoutSeconds: 120},
   async () => {
+    console.log("recoverStravaSyncs called");
     // Finished jobs have no nextRunAt. This query uses a single-field index.
     const due = await db
       .collection(JOBS)
       .where("nextRunAt", "<=", Date.now())
       .limit(100)
       .get();
+    if (!due.docs.length) return;
     for (const snapshot of due.docs) {
       const job = snapshot.data() as SyncJob;
       try {
@@ -1317,21 +1385,30 @@ export const onNewActivity = onDocumentCreated(
     retry: true,
   },
   async (event) => {
+    console.log(
+      `onNewActivity called with 
+      ${event.params.userId} 
+      ${event.params.activityId}`,
+    );
     if (!event.data || event.data.data().stravaSyncRun) return;
     await queueActivity(event.params.userId, Number(event.params.activityId));
   },
 );
 
 const queueActivity = async (
-  userId: string, activityId: number,
+  userId: string,
+  activityId: number,
 ): Promise<void> => {
   if (!Number.isSafeInteger(activityId) || activityId <= 0) return;
   const ref = db.doc(`${JOBS}/${userId}`);
   const job = await db.runTransaction(async (tx) => {
     const current = (await tx.get(ref)).data() as SyncJob | undefined;
     const next: SyncJob = current || {
-      runId: crypto.randomUUID(), connectionId: "", status: "pending",
-      failures: 0, attempts: 0,
+      runId: crypto.randomUUID(),
+      connectionId: "",
+      status: "pending",
+      failures: 0,
+      attempts: 0,
     };
     const child = workItem("activity", activityId);
     const work = workCollection({userId, runId: next.runId}).doc(child.id);
@@ -1359,47 +1436,52 @@ export const onNewPowerCurve = onDocumentWritten(
     region: REGION,
   },
   async (event) => {
+    console.log(
+      `onNewPowerCurve called with 
+      ${event.params.userId} 
+      ${event.params.activityId}`,
+    );
     const userId = event.params.userId;
+    const activityId = event.params.activityId;
 
-    const activitiesPath = `users/${userId}/activities`;
+    const newPowerCurveRef = await db
+      .doc(`users/${userId}/activities/${activityId}/powerCurve/${activityId}`)
+      .get();
 
-    const athleteActivities = await db.collection(activitiesPath).get();
+    const newPowerCurve = newPowerCurveRef.data()?.powerCurve;
 
-    const powerCurves = await Promise.all(
-      athleteActivities.docs.map(async (activityRef) => {
-        const powerCurveRef = await db
-          .doc(
-            `${activitiesPath}/${activityRef.id}/powerCurve/${activityRef.id}`,
-          )
-          .get();
-        return powerCurveRef.data()?.powerCurve as ActivityPowerCurve;
-      }),
-    );
+    const existingBestPowerCurveRef = await db
+      .doc(`users/${userId}/performance/profile`)
+      .get();
 
-    const bestPowerCurve = powerCurves.reduce(
-      (best: ActivityPowerCurve, current) => {
-        if (!current) return best;
-        for (const duration of DURATIONS) {
-          const currentPowerW = current[duration];
+    if (!existingBestPowerCurveRef.exists) {
+      return db.doc(`users/${userId}/performance/profile`).set({
+        powerCurve: newPowerCurve,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
 
-          if (
-            typeof currentPowerW === "number" &&
-            Number.isFinite(currentPowerW) &&
-            currentPowerW > (best[duration] || 0)
-          ) {
-            best[duration] = currentPowerW;
-          }
-        }
-        return best;
-      },
-      {} as ActivityPowerCurve,
-    );
+    const existingBestPowerCurve = existingBestPowerCurveRef.data()?.powerCurve;
+    let hasChanged = false;
 
-    if (Object.keys(bestPowerCurve).length === 0) return;
+    for (const duration of DURATIONS) {
+      const currentPowerW = newPowerCurve[duration];
+
+      if (
+        typeof currentPowerW === "number" &&
+        Number.isFinite(currentPowerW) &&
+        currentPowerW > (existingBestPowerCurve[duration] || 0)
+      ) {
+        existingBestPowerCurve[duration] = currentPowerW;
+        hasChanged = true;
+      }
+    }
+
+    if (!hasChanged || Object.keys(existingBestPowerCurve).length === 0) return;
 
     return db.doc(`users/${userId}/performance/profile`).set(
       {
-        powerCurve: bestPowerCurve,
+        powerCurve: existingBestPowerCurve,
         updatedAt: FieldValue.serverTimestamp(),
       },
       {merge: true},
@@ -1454,9 +1536,13 @@ export const onNewSegment = onDocumentWritten(
     region: REGION,
   },
   async (event) => {
-    const segmentId = event.params.segmentId;
+    console.log(`onNewSegment called with ${event.params.segmentId}`);
+    const segmentId = parseInt(event.params.segmentId);
     const segmentRef = await db.doc(`segments/${segmentId}`).get();
-    const segment = segmentRef.data() as Segment | undefined;
+    const segment = {
+      ...(segmentRef.data() as Segment),
+      id: segmentId,
+    };
     // Explore summaries cannot support KOM scoring; wait for full details.
     if (!segment || segment.resource_state === 2 || !segment.xoms) return;
 
@@ -1493,9 +1579,57 @@ export const onNewSegment = onDocumentWritten(
         segment: segmentRef.ref,
         name: segment.name,
         score,
-        ...(segmentRef.data()?.expiresAt ? {
-          expiresAt: segmentRef.data()?.expiresAt,
-        } : {}),
+        ...(segmentRef.data()?.expiresAt ?
+          {
+            expiresAt: segmentRef.data()?.expiresAt,
+          } :
+          {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  },
+);
+
+export const onNewUserPerformanceProfile = onDocumentWritten(
+  {
+    document: "users/{id}/performance/profile",
+    region: REGION,
+  },
+  async (event) => {
+    console.log(`onNewUserPerformanceProfile called with ${event.params.id}`);
+    const userId = event.params.id;
+
+    const athleteRef = await db.doc(`users/${userId}`).get();
+
+    if (!athleteRef.exists) {
+      return;
+    }
+
+    const powerCurveRef = await db
+      .doc(`users/${userId}/performance/profile`)
+      .get();
+
+    if (!powerCurveRef.exists) {
+      return;
+    }
+
+    const segmentsRef = await db.collection("segments").get();
+
+    for (const doc of segmentsRef.docs) {
+      const segment = doc.data() as Segment;
+
+      const score = computeSegmentScore(
+        segment,
+        athleteRef.data() as AthleteProfile,
+        powerCurveRef.data()?.powerCurve as ActivityPowerCurve,
+      );
+
+      console.log(`Computed score for segment ${segment.id}`, score);
+
+      await db.doc(`users/${userId}/segments/${segment.id}`).set({
+        segment: db.collection(`segments/${segment.id}`),
+        name: segment.name,
+        score,
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
@@ -1736,11 +1870,6 @@ export function predictSegmentTime(
   };
 }
 
-type PowerCurvePoint = {
-  durationSeconds: number;
-  powerW: number;
-};
-
 /**
  * Reads known benchmark durations from a stored power curve.
  *
@@ -1820,80 +1949,4 @@ function bestAveragePowerForDuration(
   const slope = clamp(rawSlope, -0.2, -0.03);
 
   return last.powerW * (duration / last.durationSeconds) ** slope;
-}
-
-/**
- * Requires a finite number.
- *
- * @param {number} value Value to validate.
- * @param {string} name Name to use in the thrown validation error.
- * @return {number} The validated value.
- */
-function requireFinite(value: number, name: string): number {
-  if (!Number.isFinite(value)) {
-    throw new Error(`${name} must be a finite number.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires a positive finite number.
- *
- * @param {number} value Value to validate.
- * @param {string} name Name to use in the thrown validation error.
- * @return {number} The validated value.
- */
-function requirePositiveFinite(value: number, name: string): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${name} must be a positive finite number.`);
-  }
-
-  return value;
-}
-
-/**
- * Requires a finite number within an inclusive range.
- *
- * @param {number} value Value to validate.
- * @param {number} minimum Inclusive minimum allowed value.
- * @param {number} maximum Inclusive maximum allowed value.
- * @param {string} name Name to use in the thrown validation error.
- * @return {number} The validated value.
- */
-function requireInRange(
-  value: number,
-  minimum: number,
-  maximum: number,
-  name: string,
-): number {
-  if (!Number.isFinite(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} must be between ${minimum} and ${maximum}.`);
-  }
-
-  return value;
-}
-
-/**
- * Clamps a number to an inclusive range.
- *
- * @param {number} value Value to clamp.
- * @param {number} minimum Inclusive minimum allowed value.
- * @param {number} maximum Inclusive maximum allowed value.
- * @return {number} The clamped value.
- */
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-/**
- * Rounds a number to a fixed number of decimal places.
- *
- * @param {number} value Value to round.
- * @param {number} decimalPlaces Number of decimal places.
- * @return {number} The rounded value.
- */
-function round(value: number, decimalPlaces: number): number {
-  const factor = 10 ** decimalPlaces;
-  return Math.round(value * factor) / factor;
 }

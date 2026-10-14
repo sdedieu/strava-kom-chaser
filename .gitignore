@@ -32,6 +32,10 @@ yarn-error.log
 /.firebase
 firebase-debug.log
 
+#Env
+/src/environments/environment.ts
+/src/environments/environment.development.ts
+
 # Miscellaneous
 /.angular/cache
 .sass-cache/

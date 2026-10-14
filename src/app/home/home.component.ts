@@ -5,6 +5,8 @@ import {
   ChangeDetectionStrategy,
   effect,
   computed,
+  Pipe,
+  PipeTransform,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { AppInitService } from '../core/app-init.service';
@@ -12,9 +14,18 @@ import { StravaService } from '../core/strava.service';
 import { Opportunity } from '../models';
 import { firstValueFrom } from 'rxjs';
 
+@Pipe({
+  name: 'stravaLink',
+})
+export class StravaLinkPipe implements PipeTransform {
+  transform(segment: any): string {
+    return `https://www.strava.com/segments/${segment.id}`;
+  }
+}
+
 @Component({
   selector: 'app-root',
-  imports: [CommonModule],
+  imports: [CommonModule, StravaLinkPipe],
   template: `
     <main class="mx-auto min-h-screen max-w-[1100px] px-6 py-14">
       <header
@@ -40,6 +51,7 @@ import { firstValueFrom } from 'rxjs';
       </header>
 
       <section class="mb-10">
+        <button (click)="runSegmentsDiscovery()">Run segments discovery</button>
         @if (connected() && segments().length > 0) {
           <div class="mb-6 flex flex-col justify-between">
             <h2 class="text-lg font-bold">Best opportunities</h2>
@@ -79,7 +91,7 @@ import { firstValueFrom } from 'rxjs';
                       {{ segment.score.estimatedTimeDiff | number: '1.0-0' }}s
                     </td>
                     <td class="border-b p-4">
-                      <a [href]="segment.stravaLink" target="_blank"
+                      <a [href]="segment | stravaLink" target="_blank"
                         >View on Strava</a
                       >
                     </td>
@@ -98,17 +110,13 @@ export class HomeComponent implements OnInit {
   private init = inject(AppInitService);
   private strava = inject(StravaService);
 
-  busy = false;
-  message = '';
-  rows: Opportunity[] = [];
-
   connected = computed(() => Boolean(this.strava.stravaToken()));
   athlete = computed(
     () =>
       `${this.strava.athelete()?.firstname} ${this.strava.athelete()?.lastname}`,
   );
 
-  segments = this.strava.sortedAthleteSegments;
+  segments = this.strava.segmentsWithScore;
 
   auth = effect(() => {
     const token = this.strava.stravaToken();
@@ -131,29 +139,12 @@ export class HomeComponent implements OnInit {
     location.href = url;
   }
 
-  sync() {
-    this.strava.normalizeExistingSegmentsXoms();
-  }
-
-  discover() {
-    this.busy = true;
-    this.message = 'Discovering and scoring segments…';
-    // Example geographic box. Replace with map-drawn bounds.
-    this.strava.discover([41.34, 2.0, 41.48, 2.25]).subscribe({
-      next: (r) => {
-        this.rows = r;
-        this.message = `Found ${r.length} candidate segments.`;
-        this.busy = false;
-      },
-      error: (e) => {
-        this.message = e.message || 'Discovery failed.';
-        this.busy = false;
-      },
-    });
-  }
-
   fmt(sec: number) {
     sec = Math.max(0, Math.round(sec));
     return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  }
+
+  runSegmentsDiscovery() {
+    this.strava.normalizeExistingActivities();
   }
 }
